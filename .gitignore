@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+joyhub_config.json
+.vscode/
+.idea/
+dist/
+build/
+release_bundle/
+*.spec
+*.zip
