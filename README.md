@@ -28,7 +28,8 @@ A modern, standalone Windows Desktop GUI and CLI application for connecting to a
 
 ### 💻 Terminal CLI Controller (joyhub_controller.py / Joyhub_Controller.exe)
 For terminal users, scripts, and headless control:
-* Interactive command shell: ibe <0-100>, pulse, heat on/off, light on/off, suck 1-5, squeeze 1-5, pump on/off, stop, aw <hex>.
+* Interactive command shell: ibe <0-100>, pulse, heat on/off, light on/off, suck 1-5, squeeze 1-5, pump on/off, stop, 
+aw <hex>.
 
 ---
 
