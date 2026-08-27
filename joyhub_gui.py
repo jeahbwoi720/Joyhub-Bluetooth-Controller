@@ -225,17 +225,19 @@ class JoyhubApp(ctk.CTk):
         super().__init__()
 
         self.title("Joyhub Bluetooth Controller")
-        self.geometry("900x760")
-        self.minsize(800, 700)
+        self.geometry("920x820")
+        self.minsize(820, 740)
 
         self.ble = BleEngine(self._update_status, self._update_telemetry)
         self.scanned_devices = []
 
-        # Pulse engine variables
+        # Pulse & Waveform engine variables
         self.pulse_active = False
         self.pulse_min = 20
         self.pulse_max = 90
         self.pulse_freq = 1.0
+        self.pulse_wave_type = "Sine 🌊"
+        self.pulse_ch_vars = [ctk.IntVar(value=1), ctk.IntVar(value=1), ctk.IntVar(value=0), ctk.IntVar(value=0)]
 
         self._build_ui()
         self._check_saved_device()
@@ -258,38 +260,41 @@ class JoyhubApp(ctk.CTk):
             fg_color="#95A5A6",
             corner_radius=12,
             font=ctk.CTkFont(size=12, weight="bold"),
-            width=180,
-            height=28
+            width=140,
+            height=30
         )
         self.status_badge.pack(side="right", padx=16, pady=12)
 
-        # Main Scrollable Grid Container
+        # Main Scrollable Body
         main_scroll = ctk.CTkScrollableFrame(self, corner_radius=10)
-        main_scroll.pack(fill="both", expand=True, padx=16, pady=8)
+        main_scroll.pack(fill="both", expand=True, padx=16, pady=6)
 
         # ---------------- Section 1: Device Connection ----------------
         conn_frame = ctk.CTkFrame(main_scroll, corner_radius=10)
         conn_frame.pack(fill="x", pady=6)
 
-        ctk.CTkLabel(conn_frame, text="📡 Device Connection", font=ctk.CTkFont(size=15, weight="bold")).grid(row=0, column=0, columnspan=4, sticky="w", padx=14, pady=(10, 4))
+        ctk.CTkLabel(conn_frame, text="📡 Bluetooth Connection", font=ctk.CTkFont(size=15, weight="bold")).pack(anchor="w", padx=14, pady=(10, 4))
 
-        self.scan_btn = ctk.CTkButton(conn_frame, text="🔍 Scan Devices", width=120, command=self._on_scan_clicked)
-        self.scan_btn.grid(row=1, column=0, padx=12, pady=10)
+        conn_row = ctk.CTkFrame(conn_frame, fg_color="transparent")
+        conn_row.pack(fill="x", padx=14, pady=(0, 10))
 
-        self.device_dropdown = ctk.CTkOptionMenu(conn_frame, values=["Click 'Scan Devices' first"], width=300)
-        self.device_dropdown.grid(row=1, column=1, padx=8, pady=10)
+        self.scan_btn = ctk.CTkButton(conn_row, text="🔍 Scan Devices", width=120, command=self._on_scan_clicked)
+        self.scan_btn.pack(side="left", padx=(0, 10))
 
-        self.connect_btn = ctk.CTkButton(conn_frame, text="Connect", fg_color="#2ECC71", hover_color="#27AE60", width=110, command=self._on_connect_clicked)
-        self.connect_btn.grid(row=1, column=2, padx=8, pady=10)
+        self.device_dropdown = ctk.CTkOptionMenu(conn_row, values=["No Devices Scanned"], width=300)
+        self.device_dropdown.pack(side="left", fill="x", expand=True, padx=(0, 10))
 
-        self.disconnect_btn = ctk.CTkButton(conn_frame, text="Disconnect", fg_color="#E74C3C", hover_color="#C0392B", width=100, command=self._on_disconnect_clicked)
-        self.disconnect_btn.grid(row=1, column=3, padx=12, pady=10)
+        self.connect_btn = ctk.CTkButton(conn_row, text="⚡ Connect", width=100, fg_color="#2ECC71", hover_color="#27AE60", command=self._on_connect_clicked)
+        self.connect_btn.pack(side="left", padx=(0, 6))
 
-        # ---------------- Section 2: Vibration & Motor Sliders ----------------
+        self.disconnect_btn = ctk.CTkButton(conn_row, text="Disconnect", width=90, fg_color="#E74C3C", hover_color="#C0392B", command=self._on_disconnect_clicked)
+        self.disconnect_btn.pack(side="left")
+
+        # ---------------- Section 2: Vibration & Motor Controls ----------------
         vibe_frame = ctk.CTkFrame(main_scroll, corner_radius=10)
         vibe_frame.pack(fill="x", pady=6)
 
-        ctk.CTkLabel(vibe_frame, text="⚡ Vibration & Multi-Motor Control", font=ctk.CTkFont(size=15, weight="bold")).pack(anchor="w", padx=14, pady=(10, 4))
+        ctk.CTkLabel(vibe_frame, text="🎛️ Motor Vibration Controls", font=ctk.CTkFont(size=15, weight="bold")).pack(anchor="w", padx=14, pady=(10, 4))
 
         # Master Slider
         m_row = ctk.CTkFrame(vibe_frame, fg_color="transparent")
@@ -378,22 +383,52 @@ class JoyhubApp(ctk.CTk):
         self.pulse_progress.set(0)
         self.pulse_progress.pack(side="right", padx=10)
 
+        # Target Channel Selection Checkboxes & Presets
+        ch_select_row = ctk.CTkFrame(pulse_frame, fg_color="transparent")
+        ch_select_row.pack(fill="x", padx=14, pady=4)
+
+        ctk.CTkLabel(ch_select_row, text="Target Channels:", width=115, anchor="w", font=ctk.CTkFont(weight="bold")).pack(side="left")
+        self.pulse_ch_checkboxes = []
+        for i in range(4):
+            cb = ctk.CTkCheckBox(ch_select_row, text=f"Ch {i+1}", variable=self.pulse_ch_vars[i], width=65)
+            cb.pack(side="left", padx=4)
+            self.pulse_ch_checkboxes.append(cb)
+
+        all_btn = ctk.CTkButton(ch_select_row, text="All", width=42, height=22, command=self._select_all_pulse_channels)
+        all_btn.pack(side="left", padx=(10, 2))
+        ch12_btn = ctk.CTkButton(ch_select_row, text="Ch 1-2", width=52, height=22, command=self._select_ch12_pulse_channels)
+        ch12_btn.pack(side="left", padx=2)
+        none_btn = ctk.CTkButton(ch_select_row, text="Clear", width=46, height=22, fg_color="#7F8C8D", hover_color="#95A5A6", command=self._clear_pulse_channels)
+        none_btn.pack(side="left", padx=2)
+
+        # Waveform Type Selector Row
+        wave_row = ctk.CTkFrame(pulse_frame, fg_color="transparent")
+        wave_row.pack(fill="x", padx=14, pady=4)
+        ctk.CTkLabel(wave_row, text="Waveform Shape:", width=115, anchor="w").pack(side="left")
+        self.wave_selector = ctk.CTkSegmentedButton(
+            wave_row,
+            values=["Sine 🌊", "Triangle 🔺", "Square ⏹️", "Sawtooth 📈", "Heartbeat 💓"],
+            command=self._on_waveform_changed
+        )
+        self.wave_selector.set("Sine 🌊")
+        self.wave_selector.pack(side="left", fill="x", expand=True)
+
         # Pulse Controls
         p_row2 = ctk.CTkFrame(pulse_frame, fg_color="transparent")
-        p_row2.pack(fill="x", padx=14, pady=4)
+        p_row2.pack(fill="x", padx=14, pady=(4, 10))
 
         ctk.CTkLabel(p_row2, text="Min %:", width=50).pack(side="left")
-        self.p_min_slider = ctk.CTkSlider(p_row2, from_=0, to=100, width=100, command=lambda v: setattr(self, "pulse_min", int(v)))
+        self.p_min_slider = ctk.CTkSlider(p_row2, from_=0, to=100, width=95, command=lambda v: setattr(self, "pulse_min", int(v)))
         self.p_min_slider.set(20)
         self.p_min_slider.pack(side="left", padx=4)
 
-        ctk.CTkLabel(p_row2, text="Max %:", width=50).pack(side="left", padx=(10, 0))
-        self.p_max_slider = ctk.CTkSlider(p_row2, from_=0, to=100, width=100, command=lambda v: setattr(self, "pulse_max", int(v)))
+        ctk.CTkLabel(p_row2, text="Max %:", width=50).pack(side="left", padx=(8, 0))
+        self.p_max_slider = ctk.CTkSlider(p_row2, from_=0, to=100, width=95, command=lambda v: setattr(self, "pulse_max", int(v)))
         self.p_max_slider.set(90)
         self.p_max_slider.pack(side="left", padx=4)
 
-        ctk.CTkLabel(p_row2, text="Speed (Hz):", width=70).pack(side="left", padx=(10, 0))
-        self.p_freq_slider = ctk.CTkSlider(p_row2, from_=0.2, to=3.0, width=100, command=lambda v: setattr(self, "pulse_freq", float(v)))
+        ctk.CTkLabel(p_row2, text="Speed (Hz):", width=70).pack(side="left", padx=(8, 0))
+        self.p_freq_slider = ctk.CTkSlider(p_row2, from_=0.2, to=3.0, width=95, command=lambda v: setattr(self, "pulse_freq", float(v)))
         self.p_freq_slider.set(1.0)
         self.p_freq_slider.pack(side="left", padx=4)
 
@@ -503,6 +538,43 @@ class JoyhubApp(ctk.CTk):
         self.squeeze_lbl.configure(text=f"Lvl {lvl}" if lvl > 0 else "Off")
         self.ble.write_feature(OP_SQUEEZING, lvl > 0, lvl)
 
+    def _select_all_pulse_channels(self):
+        for v in self.pulse_ch_vars:
+            v.set(1)
+
+    def _select_ch12_pulse_channels(self):
+        self.pulse_ch_vars[0].set(1)
+        self.pulse_ch_vars[1].set(1)
+        self.pulse_ch_vars[2].set(0)
+        self.pulse_ch_vars[3].set(0)
+
+    def _clear_pulse_channels(self):
+        for v in self.pulse_ch_vars:
+            v.set(0)
+
+    def _on_waveform_changed(self, value):
+        self.pulse_wave_type = value
+
+    def _calculate_waveform(self, t, freq):
+        phase = (t * freq) % 1.0
+        wtype = self.pulse_wave_type
+
+        if "Triangle" in wtype:
+            return phase * 2.0 if phase < 0.5 else (1.0 - phase) * 2.0
+        elif "Square" in wtype:
+            return 1.0 if phase < 0.5 else 0.0
+        elif "Sawtooth" in wtype:
+            return phase
+        elif "Heartbeat" in wtype:
+            if phase < 0.15:
+                return math.sin(phase / 0.15 * math.pi)
+            elif 0.20 <= phase < 0.35:
+                return 0.7 * math.sin((phase - 0.20) / 0.15 * math.pi)
+            else:
+                return 0.0
+        else: # Sine
+            return (math.sin(t * freq * math.pi * 2.0) + 1.0) * 0.5
+
     def _on_pulse_toggle(self):
         self.pulse_active = self.pulse_switch.get() == 1
         if not self.pulse_active:
@@ -514,11 +586,26 @@ class JoyhubApp(ctk.CTk):
             min_v = self.pulse_min
             max_v = self.pulse_max
             freq = self.pulse_freq
-            wave = (math.sin(time.time() * freq * math.pi * 2.0) + 1.0) * 0.5
+            t = time.time()
+            wave = self._calculate_waveform(t, freq)
             current_pct = int(min_v + (max_v - min_v) * wave)
 
             self.pulse_progress.set(wave)
-            self._dispatch_vibe([current_pct, current_pct, 0, 0])
+
+            # Build per-channel speed array based on selected channels
+            speeds = []
+            for i in range(4):
+                if self.pulse_ch_vars[i].get() == 1:
+                    speeds.append(current_pct)
+                    self.ch_sliders[i].set(current_pct)
+                    self.ch_labels[i].configure(text=f"{current_pct}%")
+                else:
+                    manual_val = int(self.ch_sliders[i].get()) if not self.pulse_active else 0
+                    speeds.append(manual_val)
+                    if manual_val == 0:
+                        self.ch_labels[i].configure(text="0%")
+
+            self._dispatch_vibe(speeds)
 
         self.after(40, self._pulse_tick)
 
