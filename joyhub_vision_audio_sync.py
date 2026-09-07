@@ -1,7 +1,7 @@
 """
 Joyhub AI Video Vision & Audio Synchronization Engine
 Author: jeahbwoi720 / Remus
-Hardware: AMD Ryzen 9 8945HS (32 Cores) | NVIDIA RTX 5060 Laptop (8GB VRAM) | 32GB RAM
+Hardware: Windows DirectML / DirectX 12 GPU Acceleration
 OS: Windows 10/11
 
 Provides real-time Computer Vision Optical Flow motion detection + WASAPI loopback audio sync
@@ -362,7 +362,7 @@ class VisionAudioSyncEngine:
         self.enable_feature_sync = False # Auto suction/squeeze on climax thrusting
 
         # Neural AI Pose & Act Sync
-        self.ai_engine_mode = "🧠 Neural AI Pose (RTX 5060)"
+        self.ai_engine_mode = "🧠 Neural AI Pose & Act Sync"
         self.auto_suction_on_oral = True
         self.auto_thrust_apex_pulse = True
         self.neural_analyzer = NeuralPoseAnalyzer()

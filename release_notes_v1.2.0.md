@@ -1,7 +1,7 @@
 ## 🧠 What's New in v1.2.0
 
-### 🚀 Real-Time Neural AI Pose & Semantic Act Recognition (DirectML + RTX 5060)
-* **DirectML Hardware Acceleration**: Runs YOLOv8-Pose over DirectX 12 DirectML on modern NVIDIA RTX / AMD GPUs at **3.2 ms per frame (> 300 FPS clean GPU)**!
+### 🚀 Real-Time Neural AI Pose & Semantic Act Recognition (DirectML GPU Acceleration)
+* **DirectML Hardware Acceleration**: Hardware-accelerated YOLOv8-Pose running over DirectX 12 DirectML on modern GPUs at **sub-3.5 ms per frame (> 250+ FPS)**!
 * **17 COCO Keypoint Intimacy Tracking**: Analyzes distance vectors between actor anatomy (pelvis, wrists, head/nose, ankles) in real time.
 * **Semantic Act Classifier**:
   * **`👅 Oral / Sucking`**: Head-to-pelvis proximity automatically commands **Hardware Suction Level 2** and cleanly powers down when transitioning.

@@ -343,7 +343,7 @@ class JoyhubApp(ctk.CTk):
         self.ai_sync_engine: VisionAudioSyncEngine | None = None
         self.ai_sync_enabled = ctk.BooleanVar(value=False)
         self.ai_fusion_mode = ctk.StringVar(value="👁️ + 🎵 Vision & Audio Blend")
-        self.ai_model_engine = ctk.StringVar(value="🧠 Neural AI Pose (RTX 5060)")
+        self.ai_model_engine = ctk.StringVar(value="🧠 Neural AI Pose & Act Sync")
         self.ai_target_mode = ctk.StringVar(value="🌟 Auto: Active Foreground Window")
         self.ai_rhythm_pulse = ctk.BooleanVar(value=True)
         self.ai_feature_sync = ctk.BooleanVar(value=False)
@@ -513,7 +513,7 @@ class JoyhubApp(ctk.CTk):
 
         self.ai_engine_seg = ctk.CTkSegmentedButton(
             ai_r1,
-            values=["🧠 Neural AI Pose (RTX 5060)", "⚡ Fast Optical Flow"],
+            values=["🧠 Neural AI Pose & Act Sync", "⚡ Fast Optical Flow"],
             variable=self.ai_model_engine,
             command=self._on_ai_engine_mode_changed
         )

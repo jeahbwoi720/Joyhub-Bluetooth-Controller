@@ -28,8 +28,8 @@ A modern, standalone Windows Desktop GUI and CLI application for connecting to a
 
 ### 👁️ AI Video Vision & Audio Sync (Global Browser / Video Player)
 Synchronize your hardware with **ANY video playing globally on your PC** (Google Chrome, Edge, Firefox, VLC, Windows Media Player, YouTube, Twitter/X, Reddit, adult streaming platforms, or VaM VR desktop mirrors):
-* **🧠 Real-Time Neural AI Pose & Semantic Act Recognition (DirectML + RTX 5060)**:
-  * **Ultra-Fast DirectML Hardware Acceleration**: Runs YOLOv8-Pose over DirectX 12 DirectML on the NVIDIA GeForce RTX 5060 at **~4.4 ms per frame (~200 FPS)**!
+* **🧠 Real-Time Neural AI Pose & Semantic Act Recognition (DirectML GPU Acceleration)**:
+  * **Ultra-Fast DirectML Hardware Acceleration**: Runs YOLOv8-Pose over DirectX 12 DirectML on modern GPUs at **sub-3.5 ms per frame (> 250+ FPS)**!
   * **17 COCO Keypoint Skeletal Tracking**: Tracks actor anatomy (pelvis, wrists, heads) in real time.
   * **Semantic Act Classifier**:
     * `👅 Oral / Sucking`: Head-to-pelvis proximity automatically commands Suction Level 2.
