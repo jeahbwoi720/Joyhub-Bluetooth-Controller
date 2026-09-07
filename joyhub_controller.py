@@ -49,6 +49,19 @@ def build_feature_packet(op: str, state_on: bool, level: int = 1) -> bytes:
         return bytes.fromhex(f"{CMD_HEADER}{op}0100{level:02x}{CMD_TRAILER_FF}")
     return bytes.fromhex(f"{CMD_HEADER}{op}00000000")
 
+# ==================== VaM UDP Bridge Protocol ====================
+class VamUdpProtocol(asyncio.DatagramProtocol):
+    def __init__(self, on_packet):
+        self.on_packet = on_packet
+
+    def datagram_received(self, data: bytes, addr):
+        try:
+            text = data.decode("utf-8", errors="ignore").strip()
+            if self.on_packet:
+                self.on_packet(text, addr)
+        except Exception:
+            pass
+
 def notification_handler(sender, data: bytearray):
     hex_str = data.hex()
     if hex_str.startswith("a021"):
@@ -71,6 +84,10 @@ class JoyhubDeviceManager:
         self.is_reconnecting = False
         self.should_run = True
         self.disconnect_event = asyncio.Event()
+        self.bridge_enabled = True
+        self.last_bridge_speeds = [-1, -1, -1, -1]
+        self.bridge_packets = 0
+        self.bridge_last_time = 0.0
 
     def _on_disconnected(self, client):
         if self.should_run:
@@ -215,6 +232,51 @@ async def main():
     # Start Auto-Reconnect background worker
     reconnect_task = asyncio.create_task(mgr.auto_reconnect_loop())
 
+    # Start VaM UDP Bridge on port 8888
+    udp_transport = None
+    try:
+        loop = asyncio.get_running_loop()
+        def on_vam_packet(text, addr):
+            if not mgr.bridge_enabled:
+                return
+            mgr.bridge_packets += 1
+            mgr.bridge_last_time = time.time()
+            if not mgr.client or not mgr.client.is_connected or not mgr.write_char:
+                return
+            if text.startswith("{"):
+                try:
+                    d = json.loads(text)
+                    if "vibe" in d:
+                        v = d["vibe"]
+                        speeds = [int(max(0, min(100, x)) * 255 / 100) for x in (v + [0, 0, 0, 0])[:4]] if isinstance(v, list) else [int(v * 255 / 100)] * 2 + [0, 0]
+                        if speeds != mgr.last_bridge_speeds:
+                            mgr.last_bridge_speeds = list(speeds)
+                            asyncio.create_task(mgr.client.write_gatt_char(mgr.write_char, build_vibe_packet(speeds), response=False))
+                    if "heat" in d:
+                        asyncio.create_task(mgr.client.write_gatt_char(mgr.write_char, build_feature_packet(OP_HEATING, bool(d["heat"])), response=False))
+                    if "light" in d:
+                        asyncio.create_task(mgr.client.write_gatt_char(mgr.write_char, build_feature_packet(OP_LIGHTING, bool(d["light"])), response=False))
+                    if "suck" in d:
+                        lvl = int(d["suck"])
+                        asyncio.create_task(mgr.client.write_gatt_char(mgr.write_char, build_feature_packet(OP_SUCKING, lvl > 0, lvl), response=False))
+                    if "squeeze" in d:
+                        lvl = int(d["squeeze"])
+                        asyncio.create_task(mgr.client.write_gatt_char(mgr.write_char, build_feature_packet(OP_SQUEEZING, lvl > 0, lvl), response=False))
+                    if "pump" in d:
+                        asyncio.create_task(mgr.client.write_gatt_char(mgr.write_char, build_feature_packet(OP_SQUIRTING, bool(d["pump"])), response=False))
+                except Exception:
+                    pass
+            elif text.upper() == "STOP":
+                asyncio.create_task(mgr.send_bytes(build_vibe_packet([0, 0, 0, 0]), "STOP"))
+
+        udp_transport, _ = await loop.create_datagram_endpoint(
+            lambda: VamUdpProtocol(on_vam_packet),
+            local_addr=("127.0.0.1", 8888)
+        )
+        print("[✓] VaM UDP Bridge active on 127.0.0.1:8888 (Automatic VaM sync)")
+    except Exception as ex:
+        print(f"[!] Note: VaM UDP Bridge on port 8888 not started ({ex})")
+
     print("\n" + "=" * 60)
     print("Available Commands:")
     print("  vibe <0-100> [ch2] [ch3] [ch4]  - Set motor speed (e.g. 'vibe 50' or 'vibe 100 50')")
@@ -224,6 +286,7 @@ async def main():
     print("  suck <1-5|off>                  - Set suction level or off")
     print("  squeeze <1-5|off>               - Set squeezing level or off")
     print("  pump <on|off>                   - Toggle fluid pump")
+    print("  bridge <on|off|status>          - Control/view VaM UDP Bridge")
     print("  stop                            - Stop all motors and features")
     print("  forget                          - Clear saved device memory")
     print("  raw <hex>                       - Send custom hex string (e.g. 'raw a003ff00aa')")
@@ -306,6 +369,19 @@ async def main():
                 else:
                     await mgr.send_bytes(build_feature_packet(OP_SQUIRTING, False), "Pump OFF")
 
+            elif cmd == "bridge":
+                sub = args[0].lower() if args else "status"
+                if sub == "on":
+                    mgr.bridge_enabled = True
+                    print("[✓] VaM UDP Bridge ENABLED.")
+                elif sub == "off":
+                    mgr.bridge_enabled = False
+                    print("[!] VaM UDP Bridge DISABLED.")
+                else:
+                    ago = f"{time.time() - mgr.bridge_last_time:.1f}s ago" if mgr.bridge_last_time > 0 else "never"
+                    state = "ENABLED" if mgr.bridge_enabled else "DISABLED"
+                    print(f"VaM Bridge: {state} | Port: 8888 | Packets: {mgr.bridge_packets} (Last: {ago})")
+
             elif cmd == "pulse":
                 min_v = int(args[0]) if len(args) > 0 else 10
                 max_v = int(args[1]) if len(args) > 1 else 90
@@ -334,7 +410,7 @@ async def main():
                     print("Invalid hex string.")
 
             elif cmd == "help":
-                print("Commands: vibe <0-100>, pulse <min> <max>, heat <on|off>, light <on|off>, suck <1-5|off>, stop, forget, raw <hex>, exit")
+                print("Commands: vibe <0-100>, pulse <min> <max>, heat <on|off>, light <on|off>, suck <1-5|off>, pump <on|off>, bridge <on|off|status>, stop, forget, raw <hex>, exit")
 
             else:
                 print(f"Unknown command: '{cmd}'. Type 'help' for options.")
@@ -342,6 +418,11 @@ async def main():
         except Exception as err:
             print(f"Error: {err}")
 
+    if udp_transport:
+        try:
+            udp_transport.close()
+        except Exception:
+            pass
     print("Disconnected.")
 
 if __name__ == "__main__":

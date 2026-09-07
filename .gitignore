@@ -6,6 +6,9 @@ joyhub_config.json
 .idea/
 dist/
 build/
+bundle/
 release_bundle/
 *.spec
 *.zip
+*.pt
+*.exe
