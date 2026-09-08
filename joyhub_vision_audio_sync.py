@@ -355,7 +355,7 @@ class VisionAudioSyncEngine:
         self.sensitivity_vision = 1.0   # 0.2 to 3.0
         self.sensitivity_audio = 1.0    # 0.2 to 3.0
         self.min_cutoff = 5             # 0% to 40% noise floor
-        self.max_speed_cap = 100        # 20% to 100%
+        self.max_speed_cap = 25         # 10% to 100%
         self.smoothing = 0.35           # 0.0 (raw snappy) to 0.85 (ultra smooth)
         
         self.target_channels = [True, True, True, True] # Channels 1, 2, 3, 4
@@ -726,8 +726,12 @@ class VisionAudioSyncEngine:
             if raw_combined < self.min_cutoff:
                 target_pct = 0
             else:
-                # Rescale from [min_cutoff, 100] -> [15, max_speed_cap]
-                scaled = 15 + (raw_combined - self.min_cutoff) / (100.0 - self.min_cutoff) * (self.max_speed_cap - 15)
+                # Rescale from [min_cutoff, 100] -> [min_floor, max_speed_cap]
+                min_floor = min(15, self.max_speed_cap)
+                if self.max_speed_cap > min_floor:
+                    scaled = min_floor + (raw_combined - self.min_cutoff) / (100.0 - self.min_cutoff) * (self.max_speed_cap - min_floor)
+                else:
+                    scaled = self.max_speed_cap
                 target_pct = max(0, min(self.max_speed_cap, int(scaled)))
 
             # 3. Exponential Smoothing
@@ -737,16 +741,17 @@ class VisionAudioSyncEngine:
 
             # 4. Optional Rhythm Stroke Pulse Modulation & Apex Impact
             final_output_pct = final_base_pct
-            if self.enable_rhythm_pulse and stroke_hz >= 0.5 and final_base_pct > 15:
+            min_floor = min(15, self.max_speed_cap)
+            if self.enable_rhythm_pulse and stroke_hz >= 0.5 and final_base_pct >= min_floor:
                 cos_phase = math.cos(2.0 * math.pi * stroke_phase)
                 if is_thrusting and self.auto_thrust_apex_pulse:
                     # Thrusting mode: heavy contrast + sharp apex penetration impact
                     pulse_mod = 0.40 + 0.60 * (cos_phase + 1.0) * 0.5
-                    apex_bonus = 12 if cos_phase > 0.82 else 0
-                    final_output_pct = int(max(15, min(self.max_speed_cap, (final_base_pct + apex_bonus) * pulse_mod)))
+                    apex_bonus = max(1, int(self.max_speed_cap * 0.12)) if cos_phase > 0.82 else 0
+                    final_output_pct = int(max(min_floor, min(self.max_speed_cap, (final_base_pct + apex_bonus) * pulse_mod)))
                 else:
                     pulse_mod = 0.55 + 0.45 * (cos_phase + 1.0) * 0.5
-                    final_output_pct = int(max(15, min(self.max_speed_cap, final_base_pct * pulse_mod)))
+                    final_output_pct = int(max(min_floor, min(self.max_speed_cap, final_base_pct * pulse_mod)))
 
             with self._lock:
                 self.live_combined_pct = final_output_pct

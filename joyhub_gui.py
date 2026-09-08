@@ -353,7 +353,7 @@ class JoyhubApp(ctk.CTk):
         self.ai_sensitivity_vision = ctk.DoubleVar(value=1.0)
         self.ai_sensitivity_audio = ctk.DoubleVar(value=1.0)
         self.ai_min_cutoff = ctk.IntVar(value=5)
-        self.ai_max_cap = ctk.IntVar(value=100)
+        self.ai_max_cap = ctk.IntVar(value=25)
         self.ai_smoothing = ctk.DoubleVar(value=0.35)
         self.ai_windows_cache = []
 
@@ -642,10 +642,10 @@ class JoyhubApp(ctk.CTk):
 
         # Max Speed Cap
         ctk.CTkLabel(ai_r4, text="Max Cap:", width=60, anchor="w").pack(side="left")
-        self.ai_max_slider = ctk.CTkSlider(ai_r4, from_=20, to=100, width=65, command=self._on_ai_max_cap_change)
-        self.ai_max_slider.set(100)
+        self.ai_max_slider = ctk.CTkSlider(ai_r4, from_=10, to=100, width=65, command=self._on_ai_max_cap_change)
+        self.ai_max_slider.set(25)
         self.ai_max_slider.pack(side="left", padx=2)
-        self.ai_max_lbl = ctk.CTkLabel(ai_r4, text="100%", width=35)
+        self.ai_max_lbl = ctk.CTkLabel(ai_r4, text="25%", width=35)
         self.ai_max_lbl.pack(side="left", padx=(0, 8))
 
         # Smoothing
