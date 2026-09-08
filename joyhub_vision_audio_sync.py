@@ -8,6 +8,7 @@ Provides real-time Computer Vision Optical Flow motion detection + WASAPI loopba
 for ANY video playing globally on the PC (Chrome, Edge, Firefox, VLC, Windows Media Player, VaM mirror, etc.).
 """
 
+import sys
 import time
 import math
 import threading
