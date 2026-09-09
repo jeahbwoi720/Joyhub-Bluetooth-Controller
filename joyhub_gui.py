@@ -1224,7 +1224,9 @@ class JoyhubApp(ctk.CTk):
                 act_color = "#E67E22" # Warm Amber/Orange
             elif "🗣️" in act or "Dialogue" in act:
                 act_color = "#16A085" # Soft Teal
-            elif "🎵" in act or "Music" in act or "Beat" in act:
+            elif "Listening" in act or "Offline" in act:
+                act_color = "#7F8C8D" # Slate Gray
+            elif "🎵" in act or "Music" in act or "Beat" in act or "Audio" in act:
                 act_color = "#2980B9" # Deep Blue
             elif "Oral" in act:
                 act_color = "#E91E63"

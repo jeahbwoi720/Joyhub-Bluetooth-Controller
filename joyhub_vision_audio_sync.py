@@ -1105,6 +1105,15 @@ class VisionAudioSyncEngine:
                 is_audio_impact = self.live_audio_is_impact
                 is_audio_breath = self.live_audio_is_breath
 
+            # If Moan & Impact Surge is deactivated, suppress moan & impact events completely
+            if not self.enable_audio_boost:
+                if is_audio_moan or is_audio_impact or audio_event in ["moan", "impact"]:
+                    is_audio_moan = False
+                    is_audio_impact = False
+                    audio_surge = 0
+                    audio_event = "ambient" if a_pct > 3 else "silence"
+                    audio_context = "🎵 Audio: Active" if a_pct > 3 else "🎵 Audio: Listening..."
+
             # Determine Active Rhythm & Driver (Motion vs. Audio)
             active_hz = 0.0
             active_phase = 0.0
@@ -1201,7 +1210,7 @@ class VisionAudioSyncEngine:
 
             # 7. Optional Feature Sync (Suction / Squeeze on Intense Thrusting or Climax Moans)
             if self.enable_feature_sync and self.on_feature_dispatch:
-                if final_output_pct > 75 or (is_audio_moan and audio_surge > 20):
+                if final_output_pct > 75 or (self.enable_audio_boost and is_audio_moan and effective_audio_surge > 20):
                     self._intense_duration += dt
                     if self._intense_duration > 1.2 and not self._feature_state_active:
                         self._feature_state_active = True
@@ -1216,8 +1225,12 @@ class VisionAudioSyncEngine:
             if "Audio Only" in self.fusion_mode:
                 if audio_bpm > 0 and audio_event == "music":
                     display_act = f"🎵 {audio_bpm} BPM Beat"
-                elif a_pct > 3 or audio_event != "silence":
+                elif is_audio_moan or is_audio_impact:
                     display_act = audio_context
+                elif audio_event in ["panting", "dialogue"]:
+                    display_act = audio_context
+                elif a_pct > 3:
+                    display_act = "🎵 Audio: Active"
                 else:
                     display_act = "🎵 Audio: Listening..."
             elif "Vision Only" in self.fusion_mode:
