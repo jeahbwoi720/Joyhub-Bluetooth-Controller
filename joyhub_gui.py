@@ -342,7 +342,7 @@ class JoyhubApp(ctk.CTk):
         # AI Vision & Audio Video Sync Engine
         self.ai_sync_engine: VisionAudioSyncEngine | None = None
         self.ai_sync_enabled = ctk.BooleanVar(value=False)
-        self.ai_fusion_mode = ctk.StringVar(value="👁️ + 🎵 Vision & Audio Blend")
+        self.ai_fusion_mode = ctk.StringVar(value="👁️ + 🎵 Blend")
         self.ai_model_engine = ctk.StringVar(value="🧠 Neural AI Pose & Act Sync")
         self.ai_target_mode = ctk.StringVar(value="🌟 Auto: Active Foreground Window")
         self.ai_rhythm_pulse = ctk.BooleanVar(value=True)
@@ -588,9 +588,9 @@ class JoyhubApp(ctk.CTk):
         # Semantic Act Recognition Badge
         self.ai_act_badge = ctk.CTkLabel(
             m_r1,
-            text="👀 Act: Detecting...",
+            text="👀 Act: Offline",
             text_color="#FFFFFF",
-            fg_color="#16A085",
+            fg_color="#7F8C8D",
             corner_radius=8,
             font=ctk.CTkFont(size=11, weight="bold"),
             width=145,
@@ -1206,7 +1206,9 @@ class JoyhubApp(ctk.CTk):
             # Update Semantic Act Badge
             act = telem.get("act_type", "👀 Scene Motion")
             act_color = "#16A085"
-            if "Oral" in act:
+            if "Audio" in act:
+                act_color = "#2980B9"
+            elif "Oral" in act:
                 act_color = "#E91E63"
             elif "Thrust" in act:
                 act_color = "#E67E22"

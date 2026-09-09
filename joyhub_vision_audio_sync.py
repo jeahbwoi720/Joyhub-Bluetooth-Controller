@@ -29,7 +29,7 @@ except ImportError:
 try:
     import soundcard as sc
     HAS_SOUNDCARD = True
-except ImportError:
+except Exception:
     HAS_SOUNDCARD = False
 
 # ==================== Win32 Helpers ====================
@@ -458,6 +458,17 @@ class VisionAudioSyncEngine:
         while not self._stop_event.is_set():
             t_start = time.time()
 
+            # If user selected Audio Only mode, bypass screen capture & inference to save CPU/GPU
+            if "Audio Only" in self.fusion_mode:
+                prev_gray = None
+                with self._lock:
+                    self.live_vision_raw = 0.0
+                    self.live_vision_pct = 0
+                    self.live_target_info = "Audio Only Active"
+                    self.live_fps = 0.0
+                time.sleep(0.05)
+                continue
+
             # 1. Determine capture bounding box
             if t_start - last_target_query > 0.4:
                 last_target_query = t_start
@@ -647,7 +658,22 @@ class VisionAudioSyncEngine:
                     time.sleep(1.0)
                     continue
 
-                mic = sc.get_microphone(id=str(speaker.id), include_loopback=True)
+                mic = None
+                try:
+                    mic = sc.get_microphone(id=str(speaker.id), include_loopback=True)
+                except Exception:
+                    mic = None
+
+                if not mic:
+                    # Fallback: search all loopback microphones
+                    try:
+                        for m in sc.all_microphones(include_loopback=True):
+                            if getattr(m, 'isloopback', False) and (speaker.name in m.name or m.name in speaker.name):
+                                mic = m
+                                break
+                    except Exception:
+                        mic = None
+
                 if not mic:
                     time.sleep(1.0)
                     continue
@@ -674,8 +700,8 @@ class VisionAudioSyncEngine:
                         # RMS amplitude
                         rms = float(np.sqrt(np.mean(mono**2)))
 
-                        # Fast Fourier Transform (FFT) for rhythm & frequency band isolation
-                        fft_vals = np.abs(np.fft.rfft(mono))
+                        # Fast Fourier Transform (FFT) for rhythm & frequency band isolation (normalized)
+                        fft_vals = np.abs(np.fft.rfft(mono)) / len(mono)
                         freqs = np.fft.rfftfreq(len(mono), 1.0 / 44100)
 
                         # Dual-band frequency analysis:
@@ -697,7 +723,7 @@ class VisionAudioSyncEngine:
 
                         mu_flux = float(np.mean(flux_hist))
                         std_flux = float(np.std(flux_hist))
-                        onset_threshold = mu_flux + 1.35 * std_flux + 0.014
+                        onset_threshold = mu_flux + 1.25 * std_flux + 0.0015
 
                         # Beat transient detection
                         is_beat = False
@@ -736,8 +762,9 @@ class VisionAudioSyncEngine:
                                 audio_hz = round(1.0 / best_dt, 1)
                                 audio_phase = ((now - last_beat_time) * audio_hz) % 1.0
 
-                        # Normalize audio percent (0 - 100%)
-                        audio_val = (rms * 0.4 + bass_energy * 0.6) * self.sensitivity_audio * 280.0
+                        # Normalize audio percent (0 - 100%) with dynamic response
+                        composite_energy = (rms * 0.45 + bass_energy * 3.5 + mid_energy * 1.5)
+                        audio_val = composite_energy * self.sensitivity_audio * 350.0
                         audio_pct = max(0, min(100, int(audio_val)))
 
                         with self._lock:
@@ -801,13 +828,15 @@ class VisionAudioSyncEngine:
                     rhythm_source = "audio"
 
             # 1. Multi-Modal Fusion
-            if self.fusion_mode == "👁️ Vision Only (Motion Flow)":
+            if "Vision Only" in self.fusion_mode:
                 raw_combined = v_pct
-            elif self.fusion_mode == "🎵 Audio Only (WASAPI Beat)":
+            elif "Audio Only" in self.fusion_mode:
                 raw_combined = a_pct
-            else: # "👁️ + 🎵 Vision & Audio Blend"
-                # Blend 65% visual motion + 35% audio energy, with beat accent
-                raw_combined = int(v_pct * 0.65 + a_pct * 0.35)
+                if beat_hit:
+                    raw_combined = min(100, raw_combined + 20)
+            else: # "👁️ + 🎵 Vision & Audio Blend" or "👁️ + 🎵 Blend"
+                # Blend 60% visual motion + 40% audio energy, with beat accent
+                raw_combined = int(v_pct * 0.60 + a_pct * 0.40)
                 if beat_hit:
                     raw_combined = min(100, raw_combined + 15)
 
@@ -874,6 +903,15 @@ class VisionAudioSyncEngine:
                         self.on_feature_dispatch("suck", 0)
 
             # 8. Send UI Telemetry
+            display_act = act_type
+            if "Audio Only" in self.fusion_mode:
+                if audio_bpm > 0:
+                    display_act = f"🎵 Audio: {audio_bpm} BPM"
+                elif a_pct > 5:
+                    display_act = "🎵 Audio: Active"
+                else:
+                    display_act = "🎵 Audio: Listening..."
+
             if self.on_telemetry:
                 self.on_telemetry({
                     "fps": fps,
@@ -887,7 +925,7 @@ class VisionAudioSyncEngine:
                     "rhythm_source": rhythm_source,
                     "target_info": target_info,
                     "beat_hit": beat_hit,
-                    "act_type": act_type
+                    "act_type": display_act
                 })
 
             time.sleep(0.033) # 30 FPS dispatch loop
