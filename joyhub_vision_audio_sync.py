@@ -109,6 +109,9 @@ def get_active_foreground_window() -> Tuple[int, str, Tuple[int, int, int, int]]
         return hwnd, title, (max(0, rect.left), max(0, rect.top), w, h)
     return hwnd, title, (0, 0, 1920, 1080)
 
+# Global DirectML execution lock to serialize DirectX 12 driver calls across threads
+_DML_INFERENCE_LOCK = threading.Lock()
+
 # ==================== Neural Pose & Semantic Intimacy Classifier ====================
 class NeuralPoseAnalyzer:
     """Real-time DirectML / GPU Neural Pose & Semantic Intimacy Classifier."""
@@ -213,7 +216,8 @@ class NeuralPoseAnalyzer:
         blob, scale, dx, dy = self.preprocess(frame)
         t0 = time.time()
         try:
-            out = self.session.run(None, {self.inp_name: blob})
+            with _DML_INFERENCE_LOCK:
+                out = self.session.run(None, {self.inp_name: blob})
             inference_ms = (time.time() - t0) * 1000
             persons = self.parse_detections(out, scale, dx, dy)
         except Exception:
@@ -417,7 +421,8 @@ class NeuralYamnetAudioClassifier:
             audio_16k = np.interp(indices, np.arange(len(audio_44k)), audio_44k).astype(np.float32)
 
             t0 = time.time()
-            out = self.session.run(None, {self.inp_name: audio_16k})
+            with _DML_INFERENCE_LOCK:
+                out = self.session.run(None, {self.inp_name: audio_16k})
             inference_ms = (time.time() - t0) * 1000
 
             scores = out[0]
@@ -618,7 +623,7 @@ class VisionAudioSyncEngine:
         self.sensitivity_vision = 1.0   # 0.2 to 3.0
         self.sensitivity_audio = 1.0    # 0.2 to 3.0
         self.min_cutoff = 5             # 0% to 40% noise floor
-        self.max_speed_cap = 25         # 10% to 100%
+        self.max_speed_cap = 50         # 10% to 100%
         self.smoothing = 0.35           # 0.0 (raw snappy) to 0.85 (ultra smooth)
         
         self.target_channels = [True, True, True, True] # Channels 1, 2, 3, 4
@@ -805,7 +810,10 @@ class VisionAudioSyncEngine:
                     ry1 = max(0, min(fh - 50, ry))
                     rx2 = max(rx1 + 50, min(fw, rx + rw))
                     ry2 = max(ry1 + 50, min(fh, ry + rh))
-                    flow_source = frame[ry1:ry2, rx1:rx2]
+                    if rx2 > rx1 and ry2 > ry1:
+                        flow_source = frame[ry1:ry2, rx1:rx2]
+                    else:
+                        flow_source = frame
 
                 # Automatic Suction Trigger on Oral scene
                 if self.auto_suction_on_oral and self.on_feature_dispatch:
@@ -820,6 +828,8 @@ class VisionAudioSyncEngine:
 
             # 4. Downscale & Grayscale
             try:
+                if flow_source is None or flow_source.size == 0 or flow_source.shape[0] < 10 or flow_source.shape[1] < 10:
+                    flow_source = frame
                 small = cv2.resize(flow_source, (ANALYSIS_W, ANALYSIS_H), interpolation=cv2.INTER_AREA)
                 gray = cv2.cvtColor(small, cv2.COLOR_BGRA2GRAY if flow_source.shape[2] == 4 else cv2.COLOR_BGR2GRAY)
                 gray = cv2.GaussianBlur(gray, (5, 5), 0)

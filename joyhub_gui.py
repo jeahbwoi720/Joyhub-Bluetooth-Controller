@@ -82,9 +82,13 @@ class VamUdpProtocol(asyncio.DatagramProtocol):
 
 # ==================== BLE Background Engine ====================
 class BleEngine:
-    def __init__(self, on_status_change, on_telemetry):
+    def __init__(self, on_status_change, on_telemetry, on_battery=None):
         self.on_status_change = on_status_change
         self.on_telemetry = on_telemetry
+        self.on_battery = on_battery
+        self.battery_char: str | None = None
+        self.battery_level: int | None = None
+        self._battery_task = None
         self.client: BleakClient | None = None
         self.write_char: str | None = None
         self.notify_char: str | None = None
@@ -154,6 +158,9 @@ class BleEngine:
     def disconnect(self):
         async def _disconnect():
             self.auto_reconnect = False
+            if self._battery_task:
+                self._battery_task.cancel()
+                self._battery_task = None
             if self.client and self.client.is_connected:
                 try:
                     await self.client.write_gatt_char(self.write_char, build_vibe_packet([0, 0, 0, 0]), response=False)
@@ -161,12 +168,21 @@ class BleEngine:
                 except Exception:
                     pass
             self.is_connected = False
+            self.battery_level = None
+            if self.on_battery:
+                self.on_battery(-1)
             self.on_status_change("Disconnected", "#95A5A6")
 
         self.run_coro(_disconnect())
 
     def _on_disconnect(self, client):
         self.is_connected = False
+        self.battery_level = None
+        if self._battery_task:
+            self._battery_task.cancel()
+            self._battery_task = None
+        if self.on_battery:
+            self.on_battery(-1)
         if self.auto_reconnect:
             self.on_status_change("Reconnecting...", "#E67E22")
             async def _reconn():
@@ -188,16 +204,20 @@ class BleEngine:
     async def _discover_chars(self):
         self.write_char = None
         self.notify_char = None
+        self.battery_char = None
         if not self.client:
             return
         for service in self.client.services:
             for char in service.characteristics:
                 props = char.properties
+                uuid_lower = char.uuid.lower()
+                if "2a19" in uuid_lower or "180f" in service.uuid.lower():
+                    self.battery_char = char.uuid
                 if "write" in props or "write-without-response" in props:
                     if self.write_char is None:
                         self.write_char = char.uuid
                 if "notify" in props or "indicate" in props:
-                    if self.notify_char is None:
+                    if self.notify_char is None and "2a19" not in uuid_lower:
                         self.notify_char = char.uuid
 
         if not self.write_char:
@@ -210,8 +230,67 @@ class BleEngine:
             except Exception:
                 pass
 
+        # Discover & read battery level (standard BLE 0x2A19)
+        if self.battery_char:
+            try:
+                bat_bytes = await self.client.read_gatt_char(self.battery_char)
+                if bat_bytes and len(bat_bytes) > 0:
+                    pct = int(bat_bytes[0])
+                    self.battery_level = pct
+                    if self.on_battery:
+                        self.on_battery(pct)
+            except Exception:
+                pass
+
+            for s in self.client.services:
+                for c in s.characteristics:
+                    if c.uuid == self.battery_char and ("notify" in c.properties or "indicate" in c.properties):
+                        try:
+                            await self.client.start_notify(self.battery_char, self._battery_notify_handler)
+                        except Exception:
+                            pass
+
+        # Start periodic battery poll loop
+        if self._battery_task:
+            self._battery_task.cancel()
+        self._battery_task = asyncio.create_task(self._battery_poll_loop())
+
+    def _battery_notify_handler(self, sender, data: bytearray):
+        if data and len(data) > 0:
+            pct = int(data[0])
+            self.battery_level = pct
+            if self.on_battery:
+                self.on_battery(pct)
+
+    async def _battery_poll_loop(self):
+        while self.is_connected and self.client and self.client.is_connected:
+            await asyncio.sleep(25.0)
+            if self.battery_char and self.is_connected:
+                try:
+                    bat_bytes = await self.client.read_gatt_char(self.battery_char)
+                    if bat_bytes and len(bat_bytes) > 0:
+                        pct = int(bat_bytes[0])
+                        self.battery_level = pct
+                        if self.on_battery:
+                            self.on_battery(pct)
+                except Exception:
+                    pass
+
     def _notify_handler(self, sender, data: bytearray):
         hex_str = data.hex()
+        # Check for proprietary Joyhub / Svakom battery telemetry packets (e.g. a008... or a020...)
+        if hex_str.startswith("a0") and len(data) >= 3:
+            op = hex_str[2:4]
+            if op in ["08", "20"]:
+                try:
+                    val = int(data[2])
+                    if 0 <= val <= 100:
+                        self.battery_level = val
+                        if self.on_battery:
+                            self.on_battery(val)
+                except Exception:
+                    pass
+
         if hex_str.startswith("a021"):
             try:
                 gyro = int(hex_str[-1], 16)
@@ -284,7 +363,7 @@ class JoyhubApp(ctk.CTk):
         self.geometry("1020x940")
         self.minsize(900, 800)
 
-        self.ble = BleEngine(self._update_status, self._update_telemetry)
+        self.ble = BleEngine(self._update_status, self._update_telemetry, self._update_battery)
         self.scanned_devices = []
 
         # Master Pulse engine variables
@@ -354,7 +433,7 @@ class JoyhubApp(ctk.CTk):
         self.ai_sensitivity_vision = ctk.DoubleVar(value=1.0)
         self.ai_sensitivity_audio = ctk.DoubleVar(value=1.0)
         self.ai_min_cutoff = ctk.IntVar(value=5)
-        self.ai_max_cap = ctk.IntVar(value=25)
+        self.ai_max_cap = ctk.IntVar(value=50)
         self.ai_smoothing = ctk.DoubleVar(value=0.35)
         self.ai_windows_cache = []
 
@@ -394,6 +473,18 @@ class JoyhubApp(ctk.CTk):
             height=30
         )
         self.status_badge.pack(side="right", padx=16, pady=12)
+
+        self.battery_badge = ctk.CTkLabel(
+            header,
+            text="🔋 --%",
+            text_color="#FFFFFF",
+            fg_color="#34495E",
+            corner_radius=12,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            width=85,
+            height=30
+        )
+        self.battery_badge.pack(side="right", padx=(0, 10), pady=12)
 
         # Main Scrollable Body
         main_scroll = ctk.CTkScrollableFrame(self, corner_radius=10)
@@ -644,9 +735,9 @@ class JoyhubApp(ctk.CTk):
         # Max Speed Cap
         ctk.CTkLabel(ai_r4, text="Max Cap:", width=60, anchor="w").pack(side="left")
         self.ai_max_slider = ctk.CTkSlider(ai_r4, from_=10, to=100, width=65, command=self._on_ai_max_cap_change)
-        self.ai_max_slider.set(25)
+        self.ai_max_slider.set(50)
         self.ai_max_slider.pack(side="left", padx=2)
-        self.ai_max_lbl = ctk.CTkLabel(ai_r4, text="25%", width=35)
+        self.ai_max_lbl = ctk.CTkLabel(ai_r4, text="50%", width=35)
         self.ai_max_lbl.pack(side="left", padx=(0, 8))
 
         # Smoothing
@@ -1182,65 +1273,68 @@ class JoyhubApp(ctk.CTk):
 
         # Process pending AI Video Sync telemetry & UI updates on the main GUI thread
         if hasattr(self, "_ai_latest_telemetry") and self._ai_latest_telemetry:
-            telem = self._ai_latest_telemetry
-            self._ai_latest_telemetry = None
-            v_pct = telem.get("vision_pct", 0)
-            a_pct = telem.get("audio_pct", 0)
-            c_pct = telem.get("combined_pct", 0)
-            hz = telem.get("stroke_hz", 0.0)
-            fps = telem.get("fps", 0.0)
-            target = telem.get("target_info", "Active")
+            try:
+                telem = self._ai_latest_telemetry
+                self._ai_latest_telemetry = None
+                v_pct = telem.get("vision_pct", 0)
+                a_pct = telem.get("audio_pct", 0)
+                c_pct = telem.get("combined_pct", 0)
+                hz = telem.get("stroke_hz", 0.0)
+                fps = telem.get("fps", 0.0)
+                target = telem.get("target_info", "Active")
 
-            self.ai_vision_meter.set(v_pct / 100.0)
-            self.ai_vision_lbl.configure(text=f"👁️ Motion: {v_pct}%")
+                self.ai_vision_meter.set(v_pct / 100.0)
+                self.ai_vision_lbl.configure(text=f"👁️ Motion: {v_pct}%")
 
-            self.ai_audio_meter.set(a_pct / 100.0)
-            self.ai_audio_lbl.configure(text=f"🎵 Audio: {a_pct}%")
+                self.ai_audio_meter.set(a_pct / 100.0)
+                self.ai_audio_lbl.configure(text=f"🎵 Audio: {a_pct}%")
 
-            self.ai_combined_meter.set(c_pct / 100.0)
-            self.ai_combined_lbl.configure(text=f"⚡ Toy Output: {c_pct}%")
+                self.ai_combined_meter.set(c_pct / 100.0)
+                self.ai_combined_lbl.configure(text=f"⚡ Toy Output: {c_pct}%")
 
-            rhythm_src = telem.get("rhythm_source", "motion")
-            audio_bpm = telem.get("audio_bpm", 0)
+                rhythm_src = telem.get("rhythm_source", "motion")
+                audio_bpm = telem.get("audio_bpm", 0)
 
-            if hz >= 0.5:
-                if rhythm_src == "audio":
-                    display_bpm = audio_bpm if audio_bpm > 0 else int(round(hz * 60))
-                    self.ai_stroke_badge.configure(text=f"🎵 {display_bpm} BPM ({hz:.1f}Hz)", fg_color="#2980B9")
+                if hz >= 0.5:
+                    if rhythm_src == "audio":
+                        display_bpm = audio_bpm if audio_bpm > 0 else int(round(hz * 60))
+                        self.ai_stroke_badge.configure(text=f"🎵 {display_bpm} BPM ({hz:.1f}Hz)", fg_color="#2980B9")
+                    else:
+                        bpm = int(round(hz * 60))
+                        self.ai_stroke_badge.configure(text=f"⚡ {hz:.1f} Hz ({bpm} BPM)", fg_color="#9B59B6")
                 else:
-                    bpm = int(round(hz * 60))
-                    self.ai_stroke_badge.configure(text=f"⚡ {hz:.1f} Hz ({bpm} BPM)", fg_color="#9B59B6")
-            else:
-                self.ai_stroke_badge.configure(text="⚡ Rhythm: Idle", fg_color="#7F8C8D")
+                    self.ai_stroke_badge.configure(text="⚡ Rhythm: Idle", fg_color="#7F8C8D")
 
-            # Update Semantic Act Badge with Rich Affect Color Palette
-            act = telem.get("act_type", "👀 Scene Motion")
-            act_color = "#16A085"
-            if "💋" in act or "Moan" in act:
-                act_color = "#E91E63" # Hot Pink
-            elif "💥" in act or "Impact" in act or "Spank" in act:
-                act_color = "#C0392B" # Crimson Red
-            elif "😮‍💨" in act or "Panting" in act or "Breath" in act:
-                act_color = "#E67E22" # Warm Amber/Orange
-            elif "🗣️" in act or "Dialogue" in act:
-                act_color = "#16A085" # Soft Teal
-            elif "Listening" in act or "Offline" in act:
-                act_color = "#7F8C8D" # Slate Gray
-            elif "🎵" in act or "Music" in act or "Beat" in act or "Audio" in act:
-                act_color = "#2980B9" # Deep Blue
-            elif "Oral" in act:
-                act_color = "#E91E63"
-            elif "Thrust" in act:
-                act_color = "#E67E22"
-            elif "Stroke" in act:
-                act_color = "#3498DB"
-            elif "Teasing" in act:
-                act_color = "#9B59B6"
-            elif "Optical Flow" in act:
-                act_color = "#7F8C8D"
-            self.ai_act_badge.configure(text=f"{act}", fg_color=act_color)
+                # Update Semantic Act Badge with Rich Affect Color Palette
+                act = telem.get("act_type", "👀 Scene Motion")
+                act_color = "#16A085"
+                if "💋" in act or "Moan" in act:
+                    act_color = "#E91E63" # Hot Pink
+                elif "💥" in act or "Impact" in act or "Spank" in act:
+                    act_color = "#C0392B" # Crimson Red
+                elif "😮‍💨" in act or "Panting" in act or "Breath" in act:
+                    act_color = "#E67E22" # Warm Amber/Orange
+                elif "🗣️" in act or "Dialogue" in act:
+                    act_color = "#16A085" # Soft Teal
+                elif "Listening" in act or "Offline" in act:
+                    act_color = "#7F8C8D" # Slate Gray
+                elif "🎵" in act or "Music" in act or "Beat" in act or "Audio" in act:
+                    act_color = "#2980B9" # Deep Blue
+                elif "Oral" in act:
+                    act_color = "#E91E63"
+                elif "Thrust" in act:
+                    act_color = "#E67E22"
+                elif "Stroke" in act:
+                    act_color = "#3498DB"
+                elif "Teasing" in act:
+                    act_color = "#9B59B6"
+                elif "Optical Flow" in act:
+                    act_color = "#7F8C8D"
+                self.ai_act_badge.configure(text=f"{act}", fg_color=act_color)
 
-            self.ai_target_lbl.configure(text=f"{target} | {fps} FPS")
+                self.ai_target_lbl.configure(text=f"{target} | {fps} FPS")
+            except Exception:
+                pass
 
         if hasattr(self, "_ai_latest_speeds") and self._ai_latest_speeds:
             sp = self._ai_latest_speeds
@@ -1812,6 +1906,22 @@ class JoyhubApp(ctk.CTk):
 
     def _update_telemetry(self, text):
         self.after(0, lambda: self.telemetry_lbl.configure(text=f"Telemetry: {text}"))
+
+    def _update_battery(self, pct: int):
+        self.after(0, lambda: self._apply_battery_ui(pct))
+
+    def _apply_battery_ui(self, pct: int):
+        if pct < 0:
+            self.battery_badge.configure(text="🔋 --%", fg_color="#34495E")
+        else:
+            pct = max(0, min(100, pct))
+            if pct > 50:
+                color = "#27AE60" # Emerald Green
+            elif pct >= 20:
+                color = "#E67E22" # Warm Amber
+            else:
+                color = "#C0392B" # Alert Red
+            self.battery_badge.configure(text=f"🔋 {pct}%", fg_color=color)
 
     def _on_master_slider(self, val):
         if self._updating_from_vam:

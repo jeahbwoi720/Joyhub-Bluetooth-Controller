@@ -97,17 +97,21 @@ class JoyhubDeviceManager:
     async def find_characteristics(self):
         self.write_char = None
         self.notify_char = None
+        self.battery_char = None
         if not self.client:
             return
 
         for service in self.client.services:
             for char in service.characteristics:
                 props = char.properties
+                uuid_lower = char.uuid.lower()
+                if "2a19" in uuid_lower or "180f" in service.uuid.lower():
+                    self.battery_char = char.uuid
                 if "write" in props or "write-without-response" in props:
                     if self.write_char is None:
                         self.write_char = char.uuid
                 if "notify" in props or "indicate" in props:
-                    if self.notify_char is None:
+                    if self.notify_char is None and "2a19" not in uuid_lower:
                         self.notify_char = char.uuid
 
         if not self.write_char:
@@ -118,6 +122,15 @@ class JoyhubDeviceManager:
         if self.notify_char:
             try:
                 await self.client.start_notify(self.notify_char, notification_handler)
+            except Exception:
+                pass
+
+        if self.battery_char:
+            try:
+                bat_bytes = await self.client.read_gatt_char(self.battery_char)
+                if bat_bytes and len(bat_bytes) > 0:
+                    pct = int(bat_bytes[0])
+                    print(f"[Battery] Device Battery Level: 🔋 {pct}%")
             except Exception:
                 pass
 
