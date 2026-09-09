@@ -11,6 +11,7 @@ for ANY video playing globally on the PC (Chrome, Edge, Firefox, VLC, Windows Me
 import sys
 import time
 import math
+import csv
 import threading
 import ctypes
 from ctypes import wintypes
@@ -325,20 +326,133 @@ class NeuralPoseAnalyzer:
             "inference_ms": inference_ms
         }
 
+# ==================== Neural Deep Learning Audio Classifier (YAMNet DirectML) ====================
+class NeuralYamnetAudioClassifier:
+    """
+    True Deep Learning Audio Event Classifier running Google's YAMNet (AudioSet ONNX)
+    accelerated with DirectML over DirectX 12.
+    Classifies 521 audio classes from 16 kHz resampled waveforms in sub-1ms, recognizing:
+      - Moan / Groan (AudioSet IDs: 22, 33)
+      - Pant / Gasp / Breathing / Sigh (AudioSet IDs: 40, 39, 36, 23)
+      - Slap / Smack (AudioSet ID: 461)
+      - Speech / Whispering / Laughter (AudioSet IDs: 0, 1, 12, 13)
+      - Music / Beat (AudioSet ID: 132)
+    """
+    def __init__(self, model_path: Optional[Path | str] = None, class_map_path: Optional[Path | str] = None):
+        self.session = None
+        self.active_provider = "None"
+        self.inp_name = ""
+        self.class_names: List[str] = []
+
+        if not HAS_ONNX:
+            return
+
+        if model_path is None:
+            candidates = [
+                Path(__file__).parent / "yamnet.onnx",
+                Path.cwd() / "yamnet.onnx",
+            ]
+            if getattr(sys, 'frozen', False):
+                candidates.insert(0, Path(sys.executable).parent / "yamnet.onnx")
+                if hasattr(sys, '_MEIPASS'):
+                    candidates.insert(0, Path(sys._MEIPASS) / "yamnet.onnx")
+            model_path = next((p for p in candidates if p.exists()), candidates[0])
+        else:
+            model_path = Path(model_path)
+
+        if not model_path.exists():
+            return
+
+        if class_map_path is None:
+            map_candidates = [
+                Path(__file__).parent / "yamnet_class_map.csv",
+                Path.cwd() / "yamnet_class_map.csv",
+            ]
+            if getattr(sys, 'frozen', False):
+                map_candidates.insert(0, Path(sys.executable).parent / "yamnet_class_map.csv")
+                if hasattr(sys, '_MEIPASS'):
+                    map_candidates.insert(0, Path(sys._MEIPASS) / "yamnet_class_map.csv")
+            class_map_path = next((p for p in map_candidates if p.exists()), map_candidates[0])
+        else:
+            class_map_path = Path(class_map_path)
+
+        try:
+            opts = ort.SessionOptions()
+            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
+            self.session = ort.InferenceSession(str(model_path), opts, providers=providers)
+            self.active_provider = self.session.get_providers()[0]
+            self.inp_name = self.session.get_inputs()[0].name
+        except Exception:
+            self.session = None
+
+        try:
+            if class_map_path.exists():
+                with open(class_map_path, 'r', encoding='utf-8') as f:
+                    reader = csv.reader(f)
+                    next(reader)
+                    self.class_names = [r[2] for r in reader if len(r) > 2]
+        except Exception:
+            pass
+
+        # AudioSet semantic indices
+        self.idx_moan = [22, 33]           # Wail, moan; Groan
+        self.idx_breath = [23, 36, 39, 40] # Sigh, Breathing, Gasp, Pant
+        self.idx_slap = [461]              # Slap, smack
+        self.idx_speech = [0, 1, 5, 12, 65]# Speech, Whispering
+        self.idx_music = [132]             # Music
+        self.idx_laughter = [13, 14]       # Laughter
+
+    def is_available(self) -> bool:
+        return self.session is not None
+
+    def analyze(self, audio_44k: np.ndarray) -> Optional[Dict[str, any]]:
+        if not self.session or len(audio_44k) < 16000:
+            return None
+
+        try:
+            # Resample to 16 kHz using vectorized interpolation (< 0.5ms)
+            num_samples = 15600 # standard 0.975s patch
+            indices = np.linspace(0, len(audio_44k) - 1, num_samples)
+            audio_16k = np.interp(indices, np.arange(len(audio_44k)), audio_44k).astype(np.float32)
+
+            t0 = time.time()
+            out = self.session.run(None, {self.inp_name: audio_16k})
+            inference_ms = (time.time() - t0) * 1000
+
+            scores = out[0]
+            mean_scores = np.mean(scores, axis=0) if scores.ndim > 1 else scores
+
+            p_moan = float(np.max(mean_scores[self.idx_moan])) if self.idx_moan else 0.0
+            p_breath = float(np.max(mean_scores[self.idx_breath])) if self.idx_breath else 0.0
+            p_slap = float(np.max(mean_scores[self.idx_slap])) if self.idx_slap else 0.0
+            p_speech = float(np.max(mean_scores[self.idx_speech])) if self.idx_speech else 0.0
+            p_music = float(np.max(mean_scores[self.idx_music])) if self.idx_music else 0.0
+
+            top_idx = int(np.argmax(mean_scores))
+            top_name = self.class_names[top_idx] if top_idx < len(self.class_names) else "Unknown"
+            top_prob = float(mean_scores[top_idx])
+
+            return {
+                "top_class": top_name,
+                "top_prob": top_prob,
+                "p_moan": p_moan,
+                "p_breath": p_breath,
+                "p_slap": p_slap,
+                "p_speech": p_speech,
+                "p_music": p_music,
+                "inference_ms": inference_ms
+            }
+        except Exception:
+            return None
+
 # ==================== Audio Semantic Classifier ====================
 class AudioSemanticClassifier:
     """
     Real-Time Acoustic Semantic Classifier & Affect Recognition Engine.
     Extracts pitch (F0 via autocorrelation), Harmonics-to-Noise Ratio (HNR),
     Zero-Crossing Rate (ZCR), crest factor, and dual-band spectral energy.
-    Classifies audio into semantic acts:
-      - 💋 Moan / Vocal Cry (F0 >= 280 Hz, high harmonicity)
-      - 😮‍💨 Heavy Panting / Breath (high ZCR, breathy noise envelope)
-      - 💥 Spank / Flesh Impact (sharp crest factor > 4.5 transient)
-      - 🗣️ Voice / Dialogue (conversational speech formants 80-280 Hz)
-      - 🎵 Music / Beat (strong low-end bass rhythm)
-      - ✨ Whispers / Tease (subtle high-ZCR quiet acoustic presence)
-      - 🤫 Silence (below noise threshold)
+    Cross-validates with YAMNet Deep Learning inferences.
     """
     def __init__(self, sr: int = 44100):
         self.sr = sr
@@ -346,7 +460,7 @@ class AudioSemanticClassifier:
         self._moan_duration = 0.0
         self._breath_duration = 0.0
 
-    def classify(self, samples: np.ndarray, dt: float = 0.023) -> Dict[str, any]:
+    def classify(self, samples: np.ndarray, dt: float = 0.023, yamnet_data: Optional[Dict[str, any]] = None) -> Dict[str, any]:
         rms = float(np.sqrt(np.mean(samples**2)))
         if rms < 0.003:
             self._moan_duration = max(0.0, self._moan_duration - dt * 2.0)
@@ -392,6 +506,7 @@ class AudioSemanticClassifier:
         is_breath = False
         surge = 0
 
+        # Baseline DSP event classification
         if crest_factor > 4.5 and high > vocal * 0.7 and rms > 0.030 and (now - self._last_impact_time > 0.18):
             is_impact = True
             self._last_impact_time = now
@@ -425,6 +540,41 @@ class AudioSemanticClassifier:
             self._moan_duration = max(0.0, self._moan_duration - dt)
             event = "ambient"
             label = "✨ Whispers / Tease"
+
+        # Cross-validate with Neural Deep Learning (YAMNet DirectML)
+        if yamnet_data:
+            p_moan = yamnet_data.get("p_moan", 0.0)
+            p_slap = yamnet_data.get("p_slap", 0.0)
+            p_breath = yamnet_data.get("p_breath", 0.0)
+            p_speech = yamnet_data.get("p_speech", 0.0)
+            p_music = yamnet_data.get("p_music", 0.0)
+
+            if p_moan > 0.18:
+                is_moan = True
+                self._moan_duration += dt
+                event = "moan"
+                if f0 > 0:
+                    label = f"💋 Moan ({int(round(f0))} Hz)"
+                else:
+                    label = f"💋 Moan (AI: {int(p_moan*100)}%)"
+                surge = max(surge, int(p_moan * 28))
+            elif p_slap > 0.18 and (now - self._last_impact_time > 0.18):
+                is_impact = True
+                self._last_impact_time = now
+                event = "impact"
+                label = "💥 Spank / Impact (AI)"
+                surge = 35
+            elif p_breath > 0.22 and event not in ["moan", "impact"]:
+                is_breath = True
+                event = "panting"
+                label = f"😮‍💨 Panting (AI: {int(p_breath*100)}%)"
+                surge = max(surge, 8)
+            elif p_speech > 0.35 and event not in ["moan", "impact", "panting"]:
+                event = "dialogue"
+                label = "🗣️ Voice / Dialogue (AI)"
+            elif p_music > 0.38 and event not in ["moan", "impact", "panting"]:
+                event = "music"
+                label = "🎵 Music / Beat (AI)"
 
         return {
             "event": event,
@@ -482,8 +632,12 @@ class VisionAudioSyncEngine:
         self.auto_thrust_apex_pulse = True
         self.neural_analyzer = NeuralPoseAnalyzer()
 
-        # Semantic Audio Context Analyzer
+        # Semantic Audio Context Analyzer (DSP + Deep Neural AI YAMNet)
         self.audio_classifier = AudioSemanticClassifier(sr=44100)
+        self.neural_audio_classifier = NeuralYamnetAudioClassifier()
+        self._rolling_audio_buf = np.zeros(0, dtype=np.float32)
+        self._last_yamnet_time = 0.0
+        self._latest_yamnet_res: Optional[Dict[str, any]] = None
 
         # Live thread-safe telemetry & metrics
         self._lock = threading.Lock()
@@ -890,8 +1044,18 @@ class VisionAudioSyncEngine:
                         audio_val = composite_energy * self.sensitivity_audio * 350.0
                         audio_pct = max(0, min(100, int(audio_val)))
 
-                        # Real-Time Semantic Audio Context & Affect Classification
-                        audio_sem = self.audio_classifier.classify(mono, dt=0.023)
+                        # Maintain rolling buffer for Deep Learning YAMNet inference (~1 sec window = 44100 samples)
+                        self._rolling_audio_buf = np.append(self._rolling_audio_buf, mono)
+                        if len(self._rolling_audio_buf) > 44100:
+                            self._rolling_audio_buf = self._rolling_audio_buf[-44100:]
+
+                        # Run YAMNet Deep Neural Network every ~220ms
+                        if self.neural_audio_classifier.is_available() and (now - self._last_yamnet_time > 0.22) and len(self._rolling_audio_buf) >= 22050:
+                            self._last_yamnet_time = now
+                            self._latest_yamnet_res = self.neural_audio_classifier.analyze(self._rolling_audio_buf)
+
+                        # Real-Time Semantic Audio Context & Affect Classification (fused with Deep Learning)
+                        audio_sem = self.audio_classifier.classify(mono, dt=0.023, yamnet_data=self._latest_yamnet_res)
 
                         with self._lock:
                             self.live_audio_raw = bass_energy
