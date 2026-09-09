@@ -41,13 +41,18 @@ Synchronize your hardware with **ANY video playing globally on your PC** (Google
   * Analyzes frame-by-frame velocity vectors in real time (running at 30–60 FPS with < 7ms processing latency on modern multi-core systems).
   * Measures motion magnitude, active area coverage, and directional velocity.
   * **Stroke Rhythm & Frequency Tracking**: Automatically detects back-and-forth thrusting reversals, stroke apex inflection points, and calculates live **Stroke Frequency (Hz and BPM)**!
-* **WASAPI Loopback Audio Reactive Analysis**:
+* **WASAPI Loopback Audio Reactive Analysis & Real-Time BPM Detection**:
   * Native Windows WASAPI system audio loopback capture (captures exactly what you hear in headphones/speakers).
-  * FFT spectrum analysis isolating low-end bass transients (20 Hz – 250 Hz) and vocal/moan envelopes with beat transient detection.
+  * FFT spectrum analysis isolating low-end bass transients (20 Hz – 250 Hz) and vocal/moan envelopes.
+  * **Real-Time Rhythm & BPM Detection Engine**:
+    * Dual-band spectral flux onset detection (Sub-bass/Bass: 25–220 Hz, Mids/Vocals: 220–1600 Hz) with dynamic statistical thresholding.
+    * Real-time BPM calculation with harmonic interval folding to anchor cleanly to the fundamental musical beat (36–230 BPM).
+    * Seamless failover: when camera pauses or pans away in Blend mode, rhythm pulsing seamlessly sustains on detected audio rhythm.
+    * Punchy beat pulse waveform shaping tailored for audio beats.
 * **3 Multi-Modal Fusion Modes**:
-  * `👁️ + 🎵 Vision & Audio Blend`: Combines visual motion velocity and audio bass transients with dynamic beat accents.
+  * `👁️ + 🎵 Vision & Audio Blend`: Combines visual motion velocity and audio bass transients with dynamic beat accents and rhythm failover.
   * `👁️ Vision Only (Motion Flow)`: Driven 100% by video motion and stroking speed.
-  * `🎵 Audio Only (WASAPI Beat)`: Driven 100% by system audio and music beats.
+  * `🎵 Audio Only (WASAPI Beat)`: Driven 100% by system audio and music beats with live BPM pulsing.
 * **Smart Adaptive Features**:
   * **⚡ Rhythm Stroke Pulse**: Modulates toy vibration amplitude in exact sync with detected stroke phase, letting you feel every single thrust and stroke directly!
   * **👅 Auto Oral Suction**: Automatically engages suction when oral acts are detected by neural vision.

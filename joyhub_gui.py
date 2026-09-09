@@ -580,7 +580,7 @@ class JoyhubApp(ctk.CTk):
             fg_color="#7F8C8D",
             corner_radius=8,
             font=ctk.CTkFont(size=11, weight="bold"),
-            width=130,
+            width=145,
             height=24
         )
         self.ai_stroke_badge.pack(side="right")
@@ -1190,9 +1190,16 @@ class JoyhubApp(ctk.CTk):
             self.ai_combined_meter.set(c_pct / 100.0)
             self.ai_combined_lbl.configure(text=f"⚡ Toy Output: {c_pct}%")
 
+            rhythm_src = telem.get("rhythm_source", "motion")
+            audio_bpm = telem.get("audio_bpm", 0)
+
             if hz >= 0.5:
-                bpm = int(hz * 60)
-                self.ai_stroke_badge.configure(text=f"⚡ {hz:.1f} Hz ({bpm} BPM)", fg_color="#9B59B6")
+                if rhythm_src == "audio":
+                    display_bpm = audio_bpm if audio_bpm > 0 else int(round(hz * 60))
+                    self.ai_stroke_badge.configure(text=f"🎵 {display_bpm} BPM ({hz:.1f}Hz)", fg_color="#2980B9")
+                else:
+                    bpm = int(round(hz * 60))
+                    self.ai_stroke_badge.configure(text=f"⚡ {hz:.1f} Hz ({bpm} BPM)", fg_color="#9B59B6")
             else:
                 self.ai_stroke_badge.configure(text="⚡ Rhythm: Idle", fg_color="#7F8C8D")
 

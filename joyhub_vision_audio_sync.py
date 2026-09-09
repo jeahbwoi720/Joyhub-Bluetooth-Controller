@@ -377,6 +377,10 @@ class VisionAudioSyncEngine:
         self.live_combined_pct = 0
         self.live_stroke_hz = 0.0
         self.live_stroke_phase = 0.0
+        self.live_audio_hz = 0.0
+        self.live_audio_bpm = 0
+        self.live_audio_phase = 0.0
+        self.live_rhythm_source = "idle"
         self.live_fps = 0.0
         self.live_target_info = "Standby"
         self.live_beat_hit = False
@@ -649,7 +653,11 @@ class VisionAudioSyncEngine:
                     continue
 
                 with mic.recorder(samplerate=44100, blocksize=1024) as rec:
-                    running_avg_energy = 0.01
+                    prev_bass = 0.0
+                    prev_mid = 0.0
+                    flux_hist = []
+                    last_beat_time = 0.0
+                    recent_intervals = []
 
                     while not self._stop_event.is_set():
                         # Read 1024 frames (~23.2 ms of audio)
@@ -658,25 +666,75 @@ class VisionAudioSyncEngine:
                             time.sleep(0.02)
                             continue
 
+                        now = time.time()
+
                         # Convert stereo to mono
                         mono = np.mean(data, axis=1) if data.ndim > 1 else data
                         
                         # RMS amplitude
                         rms = float(np.sqrt(np.mean(mono**2)))
 
-                        # Fast Fourier Transform (FFT) for bass / rhythm isolation
+                        # Fast Fourier Transform (FFT) for rhythm & frequency band isolation
                         fft_vals = np.abs(np.fft.rfft(mono))
                         freqs = np.fft.rfftfreq(len(mono), 1.0 / 44100)
 
-                        # Bass band: 20 Hz to 250 Hz (kicks, moans, rhythmic impact)
-                        bass_mask = (freqs >= 20) & (freqs <= 250)
+                        # Dual-band frequency analysis:
+                        # Bass band: 25 Hz to 220 Hz (kicks, low-end transients, basslines)
+                        # Mid band: 220 Hz to 1600 Hz (percussive claps/snares, moans, vocal rhythm)
+                        bass_mask = (freqs >= 25) & (freqs <= 220)
+                        mid_mask = (freqs >= 220) & (freqs <= 1600)
                         bass_energy = float(np.mean(fft_vals[bass_mask])) if np.any(bass_mask) else 0.0
+                        mid_energy = float(np.mean(fft_vals[mid_mask])) if np.any(mid_mask) else 0.0
+
+                        # Spectral Flux (Onset Detection Function)
+                        flux = max(0.0, bass_energy - prev_bass) * 0.75 + max(0.0, mid_energy - prev_mid) * 0.25
+                        prev_bass = bass_energy
+                        prev_mid = mid_energy
+
+                        flux_hist.append(flux)
+                        if len(flux_hist) > 40: # ~900 ms rolling statistical window
+                            flux_hist.pop(0)
+
+                        mu_flux = float(np.mean(flux_hist))
+                        std_flux = float(np.std(flux_hist))
+                        onset_threshold = mu_flux + 1.35 * std_flux + 0.014
 
                         # Beat transient detection
                         is_beat = False
-                        if bass_energy > running_avg_energy * 1.6 and bass_energy > 0.04:
+                        if flux > onset_threshold and (now - last_beat_time) > 0.22:
                             is_beat = True
-                        running_avg_energy = running_avg_energy * 0.95 + bass_energy * 0.05
+                            if last_beat_time > 0:
+                                dt = now - last_beat_time
+                                if 0.26 <= dt <= 1.65: # Valid BPM range: 36 BPM to 230 BPM
+                                    recent_intervals.append(dt)
+                                    if len(recent_intervals) > 10:
+                                        recent_intervals.pop(0)
+                            last_beat_time = now
+
+                        # Estimate Audio BPM & Hz from interval clusters
+                        audio_bpm = 0
+                        audio_hz = 0.0
+                        audio_phase = 0.0
+
+                        if (now - last_beat_time) > 2.2:
+                            # Silence or no rhythmic beat for 2.2s -> idle
+                            recent_intervals.clear()
+                        elif len(recent_intervals) >= 3:
+                            # Harmonic folding: fold fast eighth-notes into fundamental quarter-note beat
+                            normalized_dts = []
+                            for dt_val in recent_intervals:
+                                if dt_val < 0.32 and (dt_val * 2.0) <= 1.6:
+                                    normalized_dts.append(dt_val * 2.0)
+                                else:
+                                    normalized_dts.append(dt_val)
+
+                            med_dt = float(np.median(normalized_dts))
+                            inliers = [x for x in normalized_dts if abs(x - med_dt) <= 0.28 * med_dt]
+                            best_dt = float(np.mean(inliers)) if inliers else med_dt
+                            if best_dt > 0.1:
+                                audio_bpm = int(round(60.0 / best_dt))
+                                audio_hz = round(1.0 / best_dt, 1)
+                                audio_phase = ((now - last_beat_time) * audio_hz) % 1.0
 
                         # Normalize audio percent (0 - 100%)
                         audio_val = (rms * 0.4 + bass_energy * 0.6) * self.sensitivity_audio * 280.0
@@ -686,6 +744,9 @@ class VisionAudioSyncEngine:
                             self.live_audio_raw = bass_energy
                             self.live_audio_pct = audio_pct
                             self.live_beat_hit = is_beat
+                            self.live_audio_bpm = audio_bpm
+                            self.live_audio_hz = audio_hz
+                            self.live_audio_phase = audio_phase
 
             except Exception:
                 time.sleep(0.5)
@@ -703,13 +764,41 @@ class VisionAudioSyncEngine:
             with self._lock:
                 v_pct = self.live_vision_pct
                 a_pct = self.live_audio_pct
-                stroke_hz = self.live_stroke_hz
-                stroke_phase = self.live_stroke_phase
+                motion_hz = self.live_stroke_hz
+                motion_phase = self.live_stroke_phase
+                audio_hz = self.live_audio_hz
+                audio_bpm = self.live_audio_bpm
+                audio_phase = self.live_audio_phase
                 fps = self.live_fps
                 target_info = self.live_target_info
                 beat_hit = self.live_beat_hit
                 act_type = self.live_act_type
                 is_thrusting = self.live_is_thrusting
+
+            # Determine Active Rhythm & Driver (Motion vs. Audio)
+            active_hz = 0.0
+            active_phase = 0.0
+            rhythm_source = "idle"
+
+            if "Audio Only" in self.fusion_mode:
+                if audio_hz >= 0.5:
+                    active_hz = audio_hz
+                    active_phase = audio_phase
+                    rhythm_source = "audio"
+            elif "Vision Only" in self.fusion_mode:
+                if motion_hz >= 0.5:
+                    active_hz = motion_hz
+                    active_phase = motion_phase
+                    rhythm_source = "motion"
+            else: # "👁️ + 🎵 Vision & Audio Blend"
+                if motion_hz >= 0.5:
+                    active_hz = motion_hz
+                    active_phase = motion_phase
+                    rhythm_source = "motion"
+                elif audio_hz >= 0.5:
+                    active_hz = audio_hz
+                    active_phase = audio_phase
+                    rhythm_source = "audio"
 
             # 1. Multi-Modal Fusion
             if self.fusion_mode == "👁️ Vision Only (Motion Flow)":
@@ -742,13 +831,17 @@ class VisionAudioSyncEngine:
             # 4. Optional Rhythm Stroke Pulse Modulation & Apex Impact
             final_output_pct = final_base_pct
             min_floor = min(15, self.max_speed_cap)
-            if self.enable_rhythm_pulse and stroke_hz >= 0.5 and final_base_pct >= min_floor:
-                cos_phase = math.cos(2.0 * math.pi * stroke_phase)
-                if is_thrusting and self.auto_thrust_apex_pulse:
+            if self.enable_rhythm_pulse and active_hz >= 0.5 and final_base_pct >= min_floor:
+                cos_phase = math.cos(2.0 * math.pi * active_phase)
+                if is_thrusting and self.auto_thrust_apex_pulse and rhythm_source == "motion":
                     # Thrusting mode: heavy contrast + sharp apex penetration impact
                     pulse_mod = 0.40 + 0.60 * (cos_phase + 1.0) * 0.5
                     apex_bonus = max(1, int(self.max_speed_cap * 0.12)) if cos_phase > 0.82 else 0
                     final_output_pct = int(max(min_floor, min(self.max_speed_cap, (final_base_pct + apex_bonus) * pulse_mod)))
+                elif rhythm_source == "audio":
+                    # Audio rhythm mode: punchy beat pulse aligned with audio BPM
+                    pulse_mod = 0.50 + 0.50 * max(0.0, (cos_phase + 1.0) * 0.5) ** 1.3
+                    final_output_pct = int(max(min_floor, min(self.max_speed_cap, final_base_pct * pulse_mod)))
                 else:
                     pulse_mod = 0.55 + 0.45 * (cos_phase + 1.0) * 0.5
                     final_output_pct = int(max(min_floor, min(self.max_speed_cap, final_base_pct * pulse_mod)))
@@ -787,7 +880,11 @@ class VisionAudioSyncEngine:
                     "vision_pct": v_pct,
                     "audio_pct": a_pct,
                     "combined_pct": final_output_pct,
-                    "stroke_hz": stroke_hz,
+                    "stroke_hz": active_hz,
+                    "motion_hz": motion_hz,
+                    "audio_hz": audio_hz,
+                    "audio_bpm": audio_bpm,
+                    "rhythm_source": rhythm_source,
                     "target_info": target_info,
                     "beat_hit": beat_hit,
                     "act_type": act_type
