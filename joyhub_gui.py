@@ -349,6 +349,7 @@ class JoyhubApp(ctk.CTk):
         self.ai_feature_sync = ctk.BooleanVar(value=False)
         self.ai_auto_oral_suction = ctk.BooleanVar(value=True)
         self.ai_apex_thrust_pulse = ctk.BooleanVar(value=True)
+        self.ai_audio_boost = ctk.BooleanVar(value=True)
         self.ai_channel_mode = ctk.StringVar(value="All Channels (1-4)")
         self.ai_sensitivity_vision = ctk.DoubleVar(value=1.0)
         self.ai_sensitivity_audio = ctk.DoubleVar(value=1.0)
@@ -593,7 +594,7 @@ class JoyhubApp(ctk.CTk):
             fg_color="#7F8C8D",
             corner_radius=8,
             font=ctk.CTkFont(size=11, weight="bold"),
-            width=145,
+            width=180,
             height=24
         )
         self.ai_act_badge.pack(side="right", padx=(0, 8))
@@ -694,7 +695,16 @@ class JoyhubApp(ctk.CTk):
             variable=self.ai_apex_thrust_pulse,
             command=self._on_ai_apex_toggle
         )
-        self.ai_apex_switch.pack(side="left")
+        self.ai_apex_switch.pack(side="left", padx=(0, 12))
+
+        self.ai_audio_boost_switch = ctk.CTkSwitch(
+            ai_r5,
+            text="💋 Moan & Impact Surge",
+            font=ctk.CTkFont(size=12),
+            variable=self.ai_audio_boost,
+            command=self._on_ai_audio_boost_toggle
+        )
+        self.ai_audio_boost_switch.pack(side="left")
 
         # ---------------- Section 4: Vibration & Motor Controls ----------------
         vibe_frame = ctk.CTkFrame(main_scroll, corner_radius=10)
@@ -1203,11 +1213,19 @@ class JoyhubApp(ctk.CTk):
             else:
                 self.ai_stroke_badge.configure(text="⚡ Rhythm: Idle", fg_color="#7F8C8D")
 
-            # Update Semantic Act Badge
+            # Update Semantic Act Badge with Rich Affect Color Palette
             act = telem.get("act_type", "👀 Scene Motion")
             act_color = "#16A085"
-            if "Audio" in act:
-                act_color = "#2980B9"
+            if "💋" in act or "Moan" in act:
+                act_color = "#E91E63" # Hot Pink
+            elif "💥" in act or "Impact" in act or "Spank" in act:
+                act_color = "#C0392B" # Crimson Red
+            elif "😮‍💨" in act or "Panting" in act or "Breath" in act:
+                act_color = "#E67E22" # Warm Amber/Orange
+            elif "🗣️" in act or "Dialogue" in act:
+                act_color = "#16A085" # Soft Teal
+            elif "🎵" in act or "Music" in act or "Beat" in act:
+                act_color = "#2980B9" # Deep Blue
             elif "Oral" in act:
                 act_color = "#E91E63"
             elif "Thrust" in act:
@@ -1591,6 +1609,7 @@ class JoyhubApp(ctk.CTk):
         self.ai_sync_engine.smoothing = float(self.ai_smooth_slider.get())
         self.ai_sync_engine.enable_rhythm_pulse = self.ai_rhythm_pulse.get()
         self.ai_sync_engine.enable_feature_sync = self.ai_feature_sync.get()
+        self.ai_sync_engine.enable_audio_boost = self.ai_audio_boost.get()
         self._on_ai_channel_mode_changed(self.ai_channel_mode.get())
 
         self._ai_sync_active = True
@@ -1702,6 +1721,10 @@ class JoyhubApp(ctk.CTk):
     def _on_ai_apex_toggle(self):
         if self.ai_sync_engine:
             self.ai_sync_engine.auto_thrust_apex_pulse = self.ai_apex_thrust_pulse.get()
+
+    def _on_ai_audio_boost_toggle(self):
+        if self.ai_sync_engine:
+            self.ai_sync_engine.enable_audio_boost = self.ai_audio_boost.get()
 
     def _on_ai_feature_sync_toggle(self):
         if self.ai_sync_engine:

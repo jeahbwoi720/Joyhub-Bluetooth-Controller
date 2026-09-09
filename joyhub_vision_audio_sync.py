@@ -325,6 +325,119 @@ class NeuralPoseAnalyzer:
             "inference_ms": inference_ms
         }
 
+# ==================== Audio Semantic Classifier ====================
+class AudioSemanticClassifier:
+    """
+    Real-Time Acoustic Semantic Classifier & Affect Recognition Engine.
+    Extracts pitch (F0 via autocorrelation), Harmonics-to-Noise Ratio (HNR),
+    Zero-Crossing Rate (ZCR), crest factor, and dual-band spectral energy.
+    Classifies audio into semantic acts:
+      - 💋 Moan / Vocal Cry (F0 >= 280 Hz, high harmonicity)
+      - 😮‍💨 Heavy Panting / Breath (high ZCR, breathy noise envelope)
+      - 💥 Spank / Flesh Impact (sharp crest factor > 4.5 transient)
+      - 🗣️ Voice / Dialogue (conversational speech formants 80-280 Hz)
+      - 🎵 Music / Beat (strong low-end bass rhythm)
+      - ✨ Whispers / Tease (subtle high-ZCR quiet acoustic presence)
+      - 🤫 Silence (below noise threshold)
+    """
+    def __init__(self, sr: int = 44100):
+        self.sr = sr
+        self._last_impact_time = 0.0
+        self._moan_duration = 0.0
+        self._breath_duration = 0.0
+
+    def classify(self, samples: np.ndarray, dt: float = 0.023) -> Dict[str, any]:
+        rms = float(np.sqrt(np.mean(samples**2)))
+        if rms < 0.003:
+            self._moan_duration = max(0.0, self._moan_duration - dt * 2.0)
+            self._breath_duration = max(0.0, self._breath_duration - dt * 2.0)
+            return {
+                "event": "silence",
+                "label": "🤫 Silence",
+                "f0": 0.0,
+                "hnr": 0.0,
+                "zcr": 0.0,
+                "surge": 0,
+                "is_moan": False,
+                "is_impact": False,
+                "is_breath": False
+            }
+
+        zcr = float(np.mean(np.abs(np.diff(np.signbit(samples)))))
+
+        N = len(samples)
+        fft_vals = np.abs(np.fft.rfft(samples)) / N
+        freqs = np.fft.rfftfreq(N, 1.0 / self.sr)
+
+        bass = float(np.mean(fft_vals[(freqs >= 25) & (freqs <= 220)]))
+        vocal = float(np.mean(fft_vals[(freqs >= 250) & (freqs <= 1800)]))
+        high = float(np.mean(fft_vals[(freqs >= 2000) & (freqs <= 8000)]))
+
+        # Pitch tracking via autocorrelation
+        min_lag = int(self.sr / 1100)
+        max_lag = int(self.sr / 75)
+        corr = np.correlate(samples, samples, mode='full')
+        corr = corr[len(corr)//2:]
+        peak_lag = min_lag + np.argmax(corr[min_lag:max_lag])
+        corr_peak = float(corr[peak_lag] / max(1e-9, corr[0]))
+        f0 = float(self.sr / peak_lag) if corr_peak > 0.32 else 0.0
+        hnr = float(corr_peak / max(0.01, (1.0 - corr_peak)))
+
+        peak_val = float(np.max(np.abs(samples)))
+        crest_factor = peak_val / max(1e-5, rms)
+        now = time.time()
+
+        is_impact = False
+        is_moan = False
+        is_breath = False
+        surge = 0
+
+        if crest_factor > 4.5 and high > vocal * 0.7 and rms > 0.030 and (now - self._last_impact_time > 0.18):
+            is_impact = True
+            self._last_impact_time = now
+            event = "impact"
+            label = "💥 Spank / Impact"
+            surge = 35
+        elif f0 >= 280 and hnr > 1.40 and vocal > 0.002:
+            is_moan = True
+            self._moan_duration += dt
+            event = "moan"
+            label = f"💋 Moan ({int(round(f0))} Hz)"
+            pitch_boost = min(20, int((f0 - 280) / 16.0))
+            dur_boost = min(15, int(self._moan_duration * 12))
+            surge = pitch_boost + dur_boost
+        elif f0 >= 80 and f0 < 280 and hnr > 1.25 and vocal > 0.002:
+            self._moan_duration = max(0.0, self._moan_duration - dt)
+            event = "dialogue"
+            label = "🗣️ Voice / Dialogue"
+        elif zcr > 0.15 and hnr < 1.15 and rms > 0.007:
+            is_breath = True
+            self._breath_duration += dt
+            self._moan_duration = max(0.0, self._moan_duration - dt)
+            event = "panting"
+            label = "😮‍💨 Heavy Panting"
+            surge = 8
+        elif bass > vocal * 1.4 and bass > 0.004:
+            self._moan_duration = max(0.0, self._moan_duration - dt)
+            event = "music"
+            label = "🎵 Music / Beat"
+        else:
+            self._moan_duration = max(0.0, self._moan_duration - dt)
+            event = "ambient"
+            label = "✨ Whispers / Tease"
+
+        return {
+            "event": event,
+            "label": label,
+            "f0": f0,
+            "hnr": hnr,
+            "zcr": zcr,
+            "surge": surge,
+            "is_moan": is_moan,
+            "is_impact": is_impact,
+            "is_breath": is_breath
+        }
+
 # ==================== Vision & Audio Engine ====================
 class VisionAudioSyncEngine:
     def __init__(
@@ -361,12 +474,16 @@ class VisionAudioSyncEngine:
         self.target_channels = [True, True, True, True] # Channels 1, 2, 3, 4
         self.enable_rhythm_pulse = True # Modulate amplitude with detected stroke rhythm
         self.enable_feature_sync = False # Auto suction/squeeze on climax thrusting
+        self.enable_audio_boost = True  # Dynamic moan intensity surge & spank kick hits
 
         # Neural AI Pose & Act Sync
         self.ai_engine_mode = "🧠 Neural AI Pose & Act Sync"
         self.auto_suction_on_oral = True
         self.auto_thrust_apex_pulse = True
         self.neural_analyzer = NeuralPoseAnalyzer()
+
+        # Semantic Audio Context Analyzer
+        self.audio_classifier = AudioSemanticClassifier(sr=44100)
 
         # Live thread-safe telemetry & metrics
         self._lock = threading.Lock()
@@ -387,6 +504,12 @@ class VisionAudioSyncEngine:
         self.live_act_type = "👀 Scene Motion"
         self.live_is_thrusting = False
         self.live_is_oral = False
+        self.live_audio_context = "🤫 Silence"
+        self.live_audio_event = "silence"
+        self.live_audio_surge = 0
+        self.live_audio_is_moan = False
+        self.live_audio_is_impact = False
+        self.live_audio_is_breath = False
 
         # Internal state history
         self._smoothed_speed = 0.0
@@ -767,6 +890,9 @@ class VisionAudioSyncEngine:
                         audio_val = composite_energy * self.sensitivity_audio * 350.0
                         audio_pct = max(0, min(100, int(audio_val)))
 
+                        # Real-Time Semantic Audio Context & Affect Classification
+                        audio_sem = self.audio_classifier.classify(mono, dt=0.023)
+
                         with self._lock:
                             self.live_audio_raw = bass_energy
                             self.live_audio_pct = audio_pct
@@ -774,6 +900,12 @@ class VisionAudioSyncEngine:
                             self.live_audio_bpm = audio_bpm
                             self.live_audio_hz = audio_hz
                             self.live_audio_phase = audio_phase
+                            self.live_audio_context = audio_sem["label"]
+                            self.live_audio_event = audio_sem["event"]
+                            self.live_audio_surge = audio_sem["surge"]
+                            self.live_audio_is_moan = audio_sem["is_moan"]
+                            self.live_audio_is_impact = audio_sem["is_impact"]
+                            self.live_audio_is_breath = audio_sem["is_breath"]
 
             except Exception:
                 time.sleep(0.5)
@@ -801,6 +933,13 @@ class VisionAudioSyncEngine:
                 beat_hit = self.live_beat_hit
                 act_type = self.live_act_type
                 is_thrusting = self.live_is_thrusting
+                is_oral = self.live_is_oral
+                audio_context = self.live_audio_context
+                audio_event = self.live_audio_event
+                audio_surge = self.live_audio_surge
+                is_audio_moan = self.live_audio_is_moan
+                is_audio_impact = self.live_audio_is_impact
+                is_audio_breath = self.live_audio_is_breath
 
             # Determine Active Rhythm & Driver (Motion vs. Audio)
             active_hz = 0.0
@@ -828,17 +967,24 @@ class VisionAudioSyncEngine:
                     rhythm_source = "audio"
 
             # 1. Multi-Modal Fusion
+            effective_audio_surge = audio_surge if self.enable_audio_boost else 0
             if "Vision Only" in self.fusion_mode:
                 raw_combined = v_pct
             elif "Audio Only" in self.fusion_mode:
-                raw_combined = a_pct
+                raw_combined = min(100, a_pct + effective_audio_surge)
                 if beat_hit:
                     raw_combined = min(100, raw_combined + 20)
+                if is_audio_impact and self.enable_audio_boost:
+                    raw_combined = 100
             else: # "👁️ + 🎵 Vision & Audio Blend" or "👁️ + 🎵 Blend"
                 # Blend 60% visual motion + 40% audio energy, with beat accent
                 raw_combined = int(v_pct * 0.60 + a_pct * 0.40)
                 if beat_hit:
                     raw_combined = min(100, raw_combined + 15)
+                if effective_audio_surge > 0:
+                    raw_combined = min(100, raw_combined + int(effective_audio_surge * 0.75))
+                if is_audio_impact and self.enable_audio_boost:
+                    raw_combined = min(100, max(raw_combined + 35, 90))
 
             # 2. Apply Noise Gate Cutoff
             if raw_combined < self.min_cutoff:
@@ -889,9 +1035,9 @@ class VisionAudioSyncEngine:
                 if self.on_speed_dispatch:
                     self.on_speed_dispatch(channel_speeds)
 
-            # 7. Optional Feature Sync (Suction / Squeeze on Intense Thrusting)
+            # 7. Optional Feature Sync (Suction / Squeeze on Intense Thrusting or Climax Moans)
             if self.enable_feature_sync and self.on_feature_dispatch:
-                if final_output_pct > 75:
+                if final_output_pct > 75 or (is_audio_moan and audio_surge > 20):
                     self._intense_duration += dt
                     if self._intense_duration > 1.2 and not self._feature_state_active:
                         self._feature_state_active = True
@@ -902,15 +1048,38 @@ class VisionAudioSyncEngine:
                         self._feature_state_active = False
                         self.on_feature_dispatch("suck", 0)
 
-            # 8. Send UI Telemetry
-            display_act = act_type
+            # 8. Send UI Telemetry with Multi-Modal Semantic Act Fusion
             if "Audio Only" in self.fusion_mode:
-                if audio_bpm > 0:
-                    display_act = f"🎵 Audio: {audio_bpm} BPM"
-                elif a_pct > 5:
-                    display_act = "🎵 Audio: Active"
+                if audio_bpm > 0 and audio_event == "music":
+                    display_act = f"🎵 {audio_bpm} BPM Beat"
+                elif a_pct > 3 or audio_event != "silence":
+                    display_act = audio_context
                 else:
                     display_act = "🎵 Audio: Listening..."
+            elif "Vision Only" in self.fusion_mode:
+                display_act = act_type
+            else: # "👁️ + 🎵 Blend"
+                # Multi-modal fusion combinations
+                if is_thrusting and is_audio_moan:
+                    display_act = f"🔥 Climax Thrusting & {audio_context}"
+                elif is_oral and is_audio_breath:
+                    display_act = "👅 Oral Sucking & Panting"
+                elif ("Stroke" in act_type or is_thrusting) and is_audio_impact:
+                    display_act = "💥 Spanking & Impact"
+                elif is_audio_moan:
+                    display_act = audio_context
+                elif is_audio_impact:
+                    display_act = "💥 Spank / Impact"
+                elif is_audio_breath and "Scene" in act_type:
+                    display_act = "😮‍💨 Heavy Panting"
+                elif act_type != "👀 Scene Motion" and act_type != "👀 Solo Action":
+                    display_act = act_type
+                elif audio_event in ["moan", "panting", "impact", "dialogue"]:
+                    display_act = audio_context
+                elif audio_bpm > 0 and audio_event == "music":
+                    display_act = f"🎵 {audio_bpm} BPM Beat"
+                else:
+                    display_act = act_type
 
             if self.on_telemetry:
                 self.on_telemetry({
@@ -925,7 +1094,8 @@ class VisionAudioSyncEngine:
                     "rhythm_source": rhythm_source,
                     "target_info": target_info,
                     "beat_hit": beat_hit,
-                    "act_type": display_act
+                    "act_type": display_act,
+                    "audio_context": audio_context
                 })
 
             time.sleep(0.033) # 30 FPS dispatch loop
